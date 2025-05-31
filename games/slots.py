@@ -222,3 +222,23 @@ class SlotsGame:
             "symbols": len(self.symbols),
             "max_payout": "500:1 (3 Diamonds)"
         }
+
+    def get_multiplier(self, reels: List[str]) -> float:
+        """Return the payout multiplier for the given reels"""
+        # Use the same logic as calculate_payout, but just return the multiplier
+        symbol_counts = {}
+        for symbol in reels:
+            symbol_counts[symbol] = symbol_counts.get(symbol, 0) + 1
+
+        best_multiplier = 0.0
+        for symbol, count in symbol_counts.items():
+            if symbol in self.payouts:
+                if count >= 3 and '3' in self.payouts[symbol]:
+                    m = float(self.payouts[symbol]['3'])
+                    if m > best_multiplier:
+                        best_multiplier = m
+                elif count >= 2 and '2' in self.payouts[symbol] and best_multiplier == 0.0:
+                    m = float(self.payouts[symbol]['2'])
+                    if m > best_multiplier:
+                        best_multiplier = m
+        return best_multiplier

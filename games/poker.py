@@ -77,6 +77,14 @@ class PokerGame:
             HandRank.PAIR: 2
         }
 
+    def get_ante_multiplier(self, rank: HandRank) -> float:
+        """Return the payout multiplier for ante bet for a given hand rank"""
+        return float(self.ante_payouts.get(rank, 1))
+
+    def get_bonus_multiplier(self, rank: HandRank) -> float:
+        """Return the payout multiplier for bonus bet for a given hand rank"""
+        return float(self.bonus_payouts.get(rank, 0))
+
     def create_deck(self) -> List[Card]:
         """Create a shuffled deck of cards"""
         deck = []

@@ -30,6 +30,10 @@ class CoinflipGame:
         else:
             return None
     
+    def get_multiplier(self) -> float:
+        """Return the payout multiplier for a win"""
+        return 2.0
+    
     async def play_game(self, interaction: discord.Interaction, prediction: str, bet_amount: int) -> Dict[str, Any]:
         """Play a coinflip game"""
         try:

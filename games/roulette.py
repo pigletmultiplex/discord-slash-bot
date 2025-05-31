@@ -276,3 +276,10 @@ class RouletteGame:
             "max_bet": None,
             "max_payout": "35:1 (Single number)"
         }
+
+    def get_multiplier(self, prediction: str) -> float:
+        """Return the payout multiplier for a given prediction string"""
+        bet_info = self.parse_prediction(prediction)
+        if "payout" in bet_info and bet_info["type"] != "invalid":
+            return float(bet_info["payout"]) + 1.0  # winnings + original bet
+        return 0.0

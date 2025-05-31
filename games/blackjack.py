@@ -32,6 +32,12 @@ class BlackjackGame:
         self.suits = ['Hearts', 'Diamonds', 'Clubs', 'Spades']
         self.ranks = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K']
         
+    def get_multiplier(self, blackjack: bool = False) -> float:
+        """Return the payout multiplier for a win"""
+        if blackjack:
+            return 2.5  # 1.5x winnings + original bet (total returned is 2.5x)
+        return 2.0     # 1x winnings + original bet (total returned is 2x)
+
     def create_deck(self, num_decks: int = 6) -> List[Card]:
         """Create a shuffled deck of cards"""
         deck = []
