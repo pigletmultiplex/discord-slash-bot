@@ -1,6 +1,7 @@
 """
 Main Discord bot class with slash commands
 """
+from sys import prefix
 import discord
 from discord.ext import commands
 import logging
@@ -32,7 +33,7 @@ class Handlers(commands.Cog, name='handlers'):
         print(self.client.user.name + " is ready")
         try:
             await self.client.change_presence(
-                activity=discord.Game(f"blackjack | {PREFIX}help")
+                activity=discord.Game(f"blackjack | {prefix}help")
             )
         except:
             pass
@@ -1083,7 +1084,7 @@ class Help(commands.Cog, name='help'):
     )
     async def help(self, ctx, request=None):
         if not request:
-            embed = make_embed(title="Commands")
+            embed = discord.Embed(title="Commands", color=discord.Color.blue())
             commands_list = [
                 (
                     name, [command for command in cog.get_commands()
@@ -1100,6 +1101,7 @@ class Help(commands.Cog, name='help'):
                         ),
                         inline=False
                     )
+            ABS_PATH = os.path.dirname(os.path.abspath(__file__))
             fp = os.path.join(ABS_PATH, 'modules/cards/aces.png')
             file = discord.File(fp, filename='aces.png')
             embed.set_thumbnail(url=f"attachment://aces.png")
@@ -1108,9 +1110,12 @@ class Help(commands.Cog, name='help'):
             if not com:
                 await ctx.invoke(self.client.get_command('help'))
                 return
-            embed = make_embed(
-                title=com.name, description=com.brief, footer="* optional"
-            )                       
+            embed = discord.Embed(
+                title=com.name,
+                description=com.brief,
+                color=discord.Color.blue()
+            )
+            embed.set_footer(text="* optional")
             embed.add_field(
                 name='Usage:',
                 value='`'+self.client.command_prefix+com.usage+'`'
