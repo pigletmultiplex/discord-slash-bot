@@ -23,6 +23,71 @@ from config import *
 
 logger = logging.getLogger(__name__)
 
+class Handlers(commands.Cog, name='handlers'):
+    def __init__(self, client: commands.Bot):
+        self.client = client
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        print(self.client.user.name + " is ready")
+        try:
+            await self.client.change_presence(
+                activity=discord.Game(f"blackjack | {PREFIX}help")
+            )
+        except:
+            pass
+
+    @commands.Cog.listener()
+    async def on_command_error(self, ctx: commands.Context, error):
+        if hasattr(ctx.command, 'on_error'):
+            return
+
+        from discord.ext.commands.errors import (
+            CommandInvokeError, CommandNotFound, MissingRequiredArgument,
+            TooManyArguments, BadArgument, UserNotFound, MemberNotFound,
+            MissingPermissions, BotMissingPermissions, CommandOnCooldown
+        )
+
+        # Custom exception for insufficient funds
+        class InsufficientFundsException(Exception):
+            pass
+
+        if isinstance(error, CommandInvokeError):
+            await self.on_command_error(ctx, error.original)
+        
+        elif isinstance(error, CommandNotFound):
+            await ctx.invoke(self.client.get_command('help'))
+
+        elif isinstance(error, (MissingRequiredArgument,
+                                TooManyArguments, BadArgument)):
+            await ctx.invoke(self.client.get_command('help'), ctx.command.name)
+
+        elif isinstance(error, (UserNotFound, MemberNotFound)):
+            await ctx.send(f"Member, `{error.argument}`, was not found.")
+
+        elif isinstance(error, MissingPermissions):
+            await ctx.send("Must have following permission(s): " + 
+            ", ".join([f'`{perm}`' for perm in error.missing_perms]))
+
+        elif isinstance(error, BotMissingPermissions):
+            await ctx.send("I must have following permission(s): " +
+            ", ".join([f'`{perm}`' for perm in error.missing_perms]))
+
+        elif isinstance(error, InsufficientFundsException):
+            await ctx.invoke(self.client.get_command('money'))
+
+        elif isinstance(error, CommandOnCooldown):
+            s = int(error.retry_after)
+            s = s % (24 * 3600)
+            h = s // 3600
+            s %= 3600
+            m = s // 60
+            s %= 60
+            await ctx.send(f'{h}hrs {m}min {s}sec remaining.')
+        
+        else:
+            raise error
+
 class GamblingBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
@@ -59,6 +124,8 @@ class GamblingBot(commands.Bot):
             
             # Register slash commands first
             await setup_commands(self)
+            # Register Handlers cog
+            await self.add_cog(Handlers(self))
             # Sync slash commands
             synced = await self.tree.sync()
             logger.info(f"Synced {len(synced)} slash commands")
@@ -740,6 +807,149 @@ async def admin_backup_command(interaction: discord.Interaction):
         logger.error(f"Admin backup command error: {e}")
         await interaction.response.send_message("❌ An error occurred", ephemeral=True)
 
+from discord import app_commands
+
+# -- General (GamblingHelpers) slash command implementations --
+
+@app_commands.describe(
+    user_id="User ID to set money/credits for",
+    money="Amount of money to set",
+    credits="Amount of credits to set"
+)
+async def set_command(interaction: discord.Interaction, user_id: str = None, money: int = 0, credits: int = 0):
+    """[Admin/Owner] Set a user's money or credits"""
+    bot = interaction.client
+    admin_user_id = str(interaction.user.id)
+    # Only allow owner or admin
+    if not bot.admin.is_admin(admin_user_id):
+        await interaction.response.send_message("❌ You don't have permission to use this command", ephemeral=True)
+        return
+    if not user_id:
+        await interaction.response.send_message("❌ You must specify a user_id", ephemeral=True)
+        return
+    if money:
+        bot.economy.set_balance(str(user_id), money)
+    # If credits tracking is implemented, add it here
+    await interaction.response.send_message(f"✅ Updated user {user_id}'s balance.", ephemeral=True)
+
+@app_commands.describe()
+async def add_command(interaction: discord.Interaction):
+    """Get free money once every cooldown period"""
+    bot = interaction.client
+    user_id = str(interaction.user.id)
+    # You may define these constants elsewhere or set as fixed values here
+    amount = 1000  # DEFAULT_BET * B_MULT
+    cooldown_hours = 12  # B_COOLDOWN
+    cooldown_seconds = cooldown_hours * 3600
+    # Use CooldownManager to enforce cooldown
+    if bot.cooldowns.is_on_cooldown(user_id, 'add_command'):
+        remaining = bot.cooldowns.get_remaining_cooldown(user_id, 'add_command')
+        await interaction.response.send_message(
+            f"⏰ You can use this again in {int(remaining // 3600)}h {(int(remaining) % 3600)//60}m.",
+            ephemeral=True
+        )
+        return
+    bot.economy.add_balance(user_id, amount)
+    bot.cooldowns.set_cooldown(user_id, 'add_command', cooldown_seconds)
+    await interaction.response.send_message(f"Added ${amount:,}. Come back in {cooldown_hours}hrs!", ephemeral=True)
+
+@app_commands.describe(
+    user="User to check money for (leave blank for yourself)"
+)
+async def money_command(interaction: discord.Interaction, user: discord.Member = None):
+    """How much money you or someone else has"""
+    bot = interaction.client
+    target = user or interaction.user
+    user_data = bot.economy.get_user_data(str(target.id))
+    embed = discord.Embed(
+        title=target.display_name,
+        description=f'**${user_data["balance"]:,}**\n**{user_data.get("credits", 0):,}** credits',
+        color=discord.Color.gold()
+    )
+    embed.set_thumbnail(url=target.display_avatar.url)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@app_commands.describe()
+async def leaderboard_command(interaction: discord.Interaction):
+    """Shows the users with the most money"""
+    bot = interaction.client
+    top = bot.economy.get_leaderboard(limit=5)
+    embed = discord.Embed(title='Leaderboard:', color=discord.Color.gold())
+    for i, entry in enumerate(top):
+        uid = entry["user_id"]
+        user = bot.get_user(int(uid)) or (await bot.fetch_user(int(uid)))
+        name = user.display_name if user else f"User {uid}"
+        embed.add_field(
+            name=f"{i+1}. {name}",
+            value=f'${entry["balance"]:,}',
+            inline=False
+        )
+    await interaction.response.send_message(embed=embed, ephemeral=False)
+
+@app_commands.describe(
+    command="Command to get help for (leave blank for all commands)"
+)
+async def help_command(interaction: discord.Interaction, command: str = None):
+    """Lists commands and gives info."""
+    bot = interaction.client
+    embed = discord.Embed(title="Commands", color=discord.Color.blue())
+    file = None
+
+    if not command:
+        # List all commands (excluding hidden/admin)
+        for cmd in bot.tree.get_commands():
+            if not getattr(cmd, "hidden", False) and not cmd.name.startswith("admin"):
+                embed.add_field(
+                    name=f"/{cmd.name}",
+                    value=cmd.description or "No description.",
+                    inline=False
+                )
+        # Optionally, add a thumbnail for fun (e.g. cards image)
+        try:
+            fp = os.path.join(os.path.dirname(__file__), 'modules/cards/aces.png')
+            if os.path.exists(fp):
+                file = discord.File(fp, filename='aces.png')
+                embed.set_thumbnail(url="attachment://aces.png")
+        except Exception:
+            pass
+    else:
+        # Show help for a specific command
+        cmd = bot.tree.get_command(command)
+        if not cmd:
+            await interaction.response.send_message("❌ Command not found.", ephemeral=True)
+            return
+        embed = discord.Embed(
+            title=f"/{cmd.name}",
+            description=cmd.description or "No description.",
+            color=discord.Color.blue()
+        )
+        # Show parameters if any, and usage formatting
+        params = []
+        usage = f"/{cmd.name}"
+        if hasattr(cmd, "parameters"):
+            for p in cmd.parameters:
+                params.append(f"`{p.name}`")
+                # Usage string with * for optional
+                if p.required:
+                    usage += f" <{p.name}>"
+                else:
+                    usage += f" *{p.name}"
+        if params:
+            embed.add_field(name="Parameters", value=", ".join(params), inline=False)
+        embed.add_field(name="Usage:", value=f"`{usage}`", inline=False)
+    await interaction.response.send_message(embed=embed, file=file, ephemeral=True)
+
+@app_commands.describe()
+async def kill_command(interaction: discord.Interaction):
+    """[Owner] Shut down the bot."""
+    bot = interaction.client
+    admin_user_id = str(interaction.user.id)
+    if not bot.admin.is_admin(admin_user_id):
+        await interaction.response.send_message("❌ You don't have permission to use this command", ephemeral=True)
+        return
+    await interaction.response.send_message("Shutting down...", ephemeral=True)
+    await bot.close()
+
 # Register slash commands
 async def setup_commands(bot: GamblingBot):
     """Setup all slash commands"""
@@ -822,8 +1032,159 @@ async def setup_commands(bot: GamblingBot):
         callback=admin_backup_command
     ))
 
+    # General/GamblingHelpers commands
+    bot.tree.add_command(discord.app_commands.Command(
+        name="set",
+        description="[Admin/Owner] Set a user's money or credits",
+        callback=set_command
+    ))
+    bot.tree.add_command(discord.app_commands.Command(
+        name="add",
+        description="Get free money once every cooldown period",
+        callback=add_command
+    ))
+    bot.tree.add_command(discord.app_commands.Command(
+        name="money",
+        description="Check how much money you or another user has",
+        callback=money_command
+    ))
+    bot.tree.add_command(discord.app_commands.Command(
+        name="leaderboard",
+        description="Shows the users with the most money",
+        callback=leaderboard_command
+    ))
+
+    # Help and kill commands
+    bot.tree.add_command(discord.app_commands.Command(
+        name="help",
+        description="Lists commands and gives info.",
+        callback=help_command
+    ))
+    bot.tree.add_command(discord.app_commands.Command(
+        name="kill",
+        description="[Owner] Shut down the bot.",
+        callback=kill_command
+    ))
+
 # Initialize commands when bot starts
 async def main():
     bot = GamblingBot()
     await setup_commands(bot)
     return bot
+
+class Help(commands.Cog, name='help'):
+    def __init__(self, client: commands.Bot):
+        self.client = client
+
+    @commands.command(
+        brief="Lists commands and gives info.",
+        usage="help *command",
+        hidden=True
+    )
+    async def help(self, ctx, request=None):
+        if not request:
+            embed = make_embed(title="Commands")
+            commands_list = [
+                (
+                    name, [command for command in cog.get_commands()
+                        if not command.hidden]
+                ) for name, cog in self.client.cogs.items()
+            ]
+            for name, cog_commands in commands_list:
+                if len(cog_commands) != 0:
+                    embed.add_field(
+                        name=name,
+                        value='\n'.join(
+                            [f'{self.client.command_prefix}{command}'
+                                for command in cog_commands]
+                        ),
+                        inline=False
+                    )
+            fp = os.path.join(ABS_PATH, 'modules/cards/aces.png')
+            file = discord.File(fp, filename='aces.png')
+            embed.set_thumbnail(url=f"attachment://aces.png")
+        else:
+            com = self.client.get_command(request)
+            if not com:
+                await ctx.invoke(self.client.get_command('help'))
+                return
+            embed = make_embed(
+                title=com.name, description=com.brief, footer="* optional"
+            )                       
+            embed.add_field(
+                name='Usage:',
+                value='`'+self.client.command_prefix+com.usage+'`'
+            )
+            file = None
+        await ctx.send(file=file, embed=embed)
+
+    @commands.command(hidden=True)
+    @commands.is_owner()
+    async def kill(self, ctx: commands.Context):
+        self.client.remove_cog('handlers')
+        await self.client.logout()
+
+class GamblingHelpers(commands.Cog, name='General'):
+    def __init__(self, client: commands.Bot) -> None:
+        self.client = client
+        self.economy = EconomyManager()
+
+    @commands.command(hidden=True)
+    @commands.is_owner()
+    async def set(
+        self,
+        ctx: commands.Context,
+        user_id: int = None,
+        money: int = 0,
+        credits: int = 0
+    ):
+        if money:
+            self.economy.set_balance(str(user_id), money)
+        # If credits tracking is implemented, add it here
+
+    @commands.command(
+        brief="Gives you $1000 once every 12hrs",
+        usage="add"
+    )
+    @commands.cooldown(1, 12 * 3600, type=commands.BucketType.user)
+    async def add(self, ctx: commands.Context):
+        amount = 1000  # DEFAULT_BET * B_MULT
+        self.economy.add_balance(str(ctx.author.id), amount)
+        await ctx.send(f"Added ${amount} come back in 12hrs")
+
+    @commands.command(
+        brief="How much money you or someone else has",
+        usage="money *[@member]",
+        aliases=['credits']
+    )
+    async def money(self, ctx: commands.Context, user: discord.Member = None):
+        target = user or ctx.author
+        user_data = self.economy.get_user_data(str(target.id))
+        embed = discord.Embed(
+            title=target.display_name,
+            description=f'**${user_data["balance"]:,}**\n**{user_data.get("credits", 0):,}** credits',
+            color=discord.Color.gold()
+        )
+        embed.set_thumbnail(url=target.display_avatar.url)
+        await ctx.send(embed=embed)
+
+    @commands.command(
+        brief="Shows the user with the most money",
+        usage="leaderboard",
+        aliases=["top"]
+    )
+    async def leaderboard(self, ctx):
+        top = self.economy.get_leaderboard(limit=5)
+        embed = discord.Embed(title='Leaderboard:', color=discord.Color.gold())
+        for i, entry in enumerate(top):
+            uid = entry["user_id"]
+            user = self.client.get_user(int(uid)) or (await self.client.fetch_user(int(uid)))
+            name = user.display_name if user else f"User {uid}"
+            embed.add_field(
+                name=f"{i+1}. {name}",
+                value=f'${entry["balance"]:,}',
+                inline=False
+            )
+        await ctx.send(embed=embed)
+
+# ...existing code...
